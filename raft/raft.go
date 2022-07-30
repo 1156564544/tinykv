@@ -169,7 +169,7 @@ func newRaft(c *Config) *Raft {
 	raft := new(Raft)
 	raft.id = c.ID
 	raft.Term = 0
-	raft.Vote = 0
+	raft.Vote = None
 
 	raftLog := new(RaftLog)
 	raftLog.storage = c.Storage

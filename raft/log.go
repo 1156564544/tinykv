@@ -14,7 +14,11 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	"fmt"
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/pingcap/errors"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -56,7 +60,21 @@ type RaftLog struct {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return nil
+	snapshot, _ := storage.Snapshot()
+	log := &RaftLog{}
+	log.storage = storage
+	log.committed = snapshot.Metadata.Index
+	log.applied = log.committed
+	log.stabled, _ = storage.LastIndex()
+	//first, err := storage.FirstIndex()
+	//if err == nil {
+	//	last, _ := storage.LastIndex()
+	//	log.entries, _ = storage.Entries(first, last+1)
+	//}
+	log.entries = make([]pb.Entry, 0)
+	// 快照这一块2C再酌情补充
+	log.pendingSnapshot = &snapshot
+	return log
 }
 
 // We need to compact the log entries in some point of time like
@@ -69,23 +87,65 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	ans := make([]pb.Entry, 0)
+	for _, entry := range l.entries {
+		if entry.Index > l.stabled {
+			ans = append(ans, entry)
+		}
+	}
+	return ans
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return nil
+	if l.committed == l.applied {
+		return
+	}
+	if l.committed <= l.stabled {
+		ents, _ = l.storage.Entries(l.applied, l.committed+1)
+		return
+	}
+	if l.applied > l.stabled {
+		for _, entry := range l.entries {
+			if entry.Index >= l.applied && entry.Index <= l.committed {
+				ents = append(ents, entry)
+			}
+		}
+		return
+	}
+	ents, _ = l.storage.Entries(l.applied, l.stabled+1)
+	for _, entry := range l.entries {
+		if entry.Index >= l.applied && entry.Index <= l.committed {
+			ents = append(ents, entry)
+		}
+	}
+	return
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	n := len(l.entries)
+	if n > 0 {
+		return l.entries[n-1].Index
+	}
+	return l.stabled
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	if l.LastIndex() < i {
+		errorInfor := fmt.Sprintf("The term %v is greater than the last index %v\n", i, l.LastIndex())
+		return 0, errors.New(errorInfor)
+	}
+	if i > l.stabled {
+		for _, entry := range l.entries {
+			if entry.Index == i {
+				return entry.Term, nil
+			}
+		}
+	}
+	return l.storage.Term(i)
 }
