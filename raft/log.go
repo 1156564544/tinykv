@@ -66,12 +66,15 @@ func newLog(storage Storage) *RaftLog {
 	log.committed = snapshot.Metadata.Index
 	log.applied = log.committed
 	log.stabled, _ = storage.LastIndex()
-	//first, err := storage.FirstIndex()
-	//if err == nil {
-	//	last, _ := storage.LastIndex()
-	//	log.entries, _ = storage.Entries(first, last+1)
-	//}
-	log.entries = make([]pb.Entry, 0)
+
+	firstindex, _ := storage.FirstIndex()
+	lastindex, _ := storage.LastIndex()
+	entries, err := storage.Entries(firstindex, lastindex+1)
+	if err != nil {
+		log.entries = make([]pb.Entry, 0)
+	} else {
+		log.entries = entries
+	}
 	// 快照这一块2C再酌情补充
 	log.pendingSnapshot = &snapshot
 	return log
@@ -102,23 +105,12 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	if l.committed == l.applied {
 		return
 	}
-	if l.committed <= l.stabled {
+	first, _ := l.storage.FirstIndex()
+
+	if l.applied < first {
+		ents, _ = l.storage.Entries(first, l.committed+1)
+	} else {
 		ents, _ = l.storage.Entries(l.applied, l.committed+1)
-		return
-	}
-	if l.applied > l.stabled {
-		for _, entry := range l.entries {
-			if entry.Index >= l.applied && entry.Index <= l.committed {
-				ents = append(ents, entry)
-			}
-		}
-		return
-	}
-	ents, _ = l.storage.Entries(l.applied, l.stabled+1)
-	for _, entry := range l.entries {
-		if entry.Index >= l.applied && entry.Index <= l.committed {
-			ents = append(ents, entry)
-		}
 	}
 	return
 }
@@ -130,7 +122,8 @@ func (l *RaftLog) LastIndex() uint64 {
 	if n > 0 {
 		return l.entries[n-1].Index
 	}
-	return l.stabled
+	last, _ := l.storage.LastIndex()
+	return last
 }
 
 // Term return the term of the entry in the given index

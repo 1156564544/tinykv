@@ -166,35 +166,34 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	raft := new(Raft)
-	raft.id = c.ID
-	raft.Term = 0
-	raft.Vote = None
-
-	raftLog := new(RaftLog)
-	raftLog.storage = c.Storage
-	raftLog.committed = 0
-	raftLog.applied = c.Applied
-	raftLog.entries = make([]pb.Entry, 0)
-	raftLog.pendingSnapshot = new(pb.Snapshot)
-	raftLog.stabled = 0
-	raft.RaftLog = raftLog
-	raft.Lead = None
-
-	raft.Prs = make(map[uint64]*Progress)
-	for _, peer := range c.peers {
-		lastIndex, _ := raft.RaftLog.storage.LastIndex()
-		raft.Prs[peer] = &Progress{0, lastIndex + 1}
+	r := &Raft{
+		id:               c.ID,
+		electionTimeout:  c.ElectionTick,
+		heartbeatTimeout: c.HeartbeatTick,
+		RaftLog:          newLog(c.Storage),
+		Prs:              make(map[uint64]*Progress),
+		votes:            make(map[uint64]bool),
 	}
-	raft.State = StateFollower
-	raft.votes = make(map[uint64]bool)
-	raft.msgs = make([]pb.Message, 0)
+	hardState, confState, _ := c.Storage.InitialState()
+	r.Vote, r.Term, r.RaftLog.committed = hardState.Vote, hardState.Term, hardState.Commit
+	if c.peers == nil {
+		c.peers = confState.GetNodes()
+	}
+	for _, peer := range c.peers {
+		if peer == r.id {
+			r.Prs[peer] = &Progress{Next: r.RaftLog.LastIndex() + 1, Match: r.RaftLog.LastIndex()}
+		} else {
+			r.Prs[peer] = &Progress{Next: r.RaftLog.LastIndex() + 1}
+		}
+		r.votes[peer] = false
+	}
+	r.heartbeatElapsed = 0
+	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
+	r.becomeFollower(0, None)
+	r.RaftLog.applied = c.Applied
 
-	raft.electionTimeout = c.ElectionTick
-	raft.heartbeatTimeout = c.HeartbeatTick
-	raft.electionElapsed = 0
 	// leadTransferee 和 PendingConfIndex在3A补上
-	return raft
+	return r
 }
 
 // tick advances the internal logical clock by a single tick.
@@ -238,14 +237,17 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
+	r.electionElapsed = 0 - rand.Intn(r.electionElapsed)
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
+	r.Term += 1
 	r.Vote = r.id
 	r.votes[r.id] = true
+	r.electionElapsed = 0 - rand.Intn(r.electionElapsed)
 }
 
 // becomeLeader transform this peer's state to leader
@@ -255,9 +257,13 @@ func (r *Raft) becomeLeader() {
 	r.Vote = r.id
 	for peer, _ := range r.votes {
 		lastIndex, _ := r.RaftLog.storage.LastIndex()
-		r.Prs[peer] = &Progress{0, lastIndex + 1}
+		if peer == r.id {
+			r.Prs[peer] = &Progress{lastIndex, lastIndex + 1}
+		} else {
+			r.Prs[peer] = &Progress{0, lastIndex + 1}
+		}
 	}
-
+	r.heartbeatElapsed = 0
 	// NOTE: Leader should propose a noop entry on its term
 
 }
@@ -278,6 +284,7 @@ func (r *Raft) Step(m pb.Message) error {
 			r.handleAppendEntries(m)
 		case pb.MessageType_MsgAppendResponse:
 		case pb.MessageType_MsgRequestVote:
+			r.handleRequestVote(m)
 		case pb.MessageType_MsgRequestVoteResponse:
 		case pb.MessageType_MsgSnapshot:
 		case pb.MessageType_MsgHeartbeat:
@@ -296,7 +303,7 @@ func (r *Raft) Step(m pb.Message) error {
 			r.handleAppendEntries(m)
 		case pb.MessageType_MsgAppendResponse:
 		case pb.MessageType_MsgRequestVote:
-			r.startRequestVote()
+			r.handleRequestVote(m)
 		case pb.MessageType_MsgRequestVoteResponse:
 			r.handleRequestVoteResponse(m)
 		case pb.MessageType_MsgSnapshot:
@@ -317,8 +324,10 @@ func (r *Raft) Step(m pb.Message) error {
 			r.handleAppendEntries(m)
 		case pb.MessageType_MsgAppendResponse:
 			r.handleAppendEntriesResponse(m)
-		case pb.MessageType_MsgRequestVoteResponse:
+		case pb.MessageType_MsgRequestVote:
 			r.handleRequestVote(m)
+		case pb.MessageType_MsgRequestVoteResponse:
+			r.handleRequestVoteResponse(m)
 		case pb.MessageType_MsgSnapshot:
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
@@ -341,7 +350,6 @@ func (r *Raft) propose(m pb.Message) {
 }
 
 func (r *Raft) startRequestVote() {
-	r.Term += 1
 	r.Vote = r.id
 	r.votes[r.id] = true
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
@@ -388,7 +396,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		lastIndex := r.RaftLog.LastIndex()
 		lastTerm, _ := r.RaftLog.Term(lastIndex)
 		// candidate的log比自己的log更新才能对candidate进行投票
-		if (lastTerm < m.LogTerm) || (lastTerm == m.LogTerm && lastIndex < m.Index) {
+		if (lastTerm < m.LogTerm) || (lastTerm == m.LogTerm && lastIndex <= m.Index) {
 			r.Vote = m.From
 			reject = false
 		}
