@@ -136,7 +136,6 @@ func testNonleaderStartElection(t *testing.T, state StateType) {
 	case StateCandidate:
 		r.becomeCandidate()
 	}
-
 	for i := 1; i < 2*et; i++ {
 		r.tick()
 	}

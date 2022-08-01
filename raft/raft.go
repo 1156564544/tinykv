@@ -207,14 +207,14 @@ func (r *Raft) tick() {
 			r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 			// 转化为候选者角色后开启选举过程
 			r.becomeCandidate()
-			r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgHup})
+			r.startRequestVote()
 		}
 	case StateCandidate:
 		r.electionElapsed += 1
 		if r.electionElapsed >= r.electionTimeout {
 			r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 			// 重新开始选举
-			r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgHup})
+			r.Step(pb.Message{MsgType: pb.MessageType_MsgHup})
 		}
 	case StateLeader:
 		r.electionElapsed += 1
@@ -222,7 +222,8 @@ func (r *Raft) tick() {
 		if r.heartbeatElapsed >= r.heartbeatTimeout {
 			r.heartbeatElapsed = 0
 			// 发送心跳信息
-			r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgBeat})
+			r.Step(pb.Message{MsgType: pb.MessageType_MsgBeat})
+			//r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgBeat})
 		}
 	}
 }
@@ -237,7 +238,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
-	r.electionElapsed = 0 - rand.Intn(r.electionElapsed)
+	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -247,7 +248,7 @@ func (r *Raft) becomeCandidate() {
 	r.Term += 1
 	r.Vote = r.id
 	r.votes[r.id] = true
-	r.electionElapsed = 0 - rand.Intn(r.electionElapsed)
+	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 }
 
 // becomeLeader transform this peer's state to leader
@@ -296,6 +297,7 @@ func (r *Raft) Step(m pb.Message) error {
 	case StateCandidate:
 		switch m.MsgType {
 		case pb.MessageType_MsgHup:
+			r.Term += 1
 			r.startRequestVote()
 		case pb.MessageType_MsgBeat:
 		case pb.MessageType_MsgPropose:
@@ -353,6 +355,9 @@ func (r *Raft) startRequestVote() {
 	r.Vote = r.id
 	r.votes[r.id] = true
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
+	if len(r.votes) == 1 {
+		r.becomeLeader()
+	}
 	for peer, _ := range r.votes {
 		if peer == r.id {
 			continue
@@ -420,7 +425,11 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		r.votes[m.From] = true
 	}
 	voteNum := 0
-	for _, v := range r.votes {
+	for peer, v := range r.votes {
+		if peer == r.id {
+			voteNum += 1
+			continue
+		}
 		if v == true {
 			voteNum += 1
 		}
@@ -485,7 +494,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
-	if m.Term > r.Term {
+	if m.Term >= r.Term {
 		r.becomeFollower(m.Term, m.From)
 		r.Vote = None
 	}
@@ -565,6 +574,9 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 
 func (r *Raft) startSendHeartbeat() {
 	for peer, _ := range r.votes {
+		if r.id == peer {
+			continue
+		}
 		r.sendHeartbeat(peer)
 	}
 	r.heartbeatElapsed = 0
@@ -594,7 +606,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 	if m.Term > r.Term {
-		r.becomeFollower(r.Term, m.From)
+		r.becomeFollower(m.Term, m.From)
 		r.Vote = None
 	}
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
