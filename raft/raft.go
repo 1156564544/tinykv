@@ -265,6 +265,7 @@ func (r *Raft) becomeLeader() {
 		} else {
 			r.Prs[peer] = &Progress{0, lastIndex + 1}
 		}
+		r.sendAppend(peer)
 	}
 	r.heartbeatElapsed = 0
 }
@@ -455,17 +456,15 @@ func (r *Raft) sendAppend(to uint64) bool {
 	//match := progress.Match
 	next := progress.Next
 	preveLogIndex := next - 1
-	if preveLogIndex > r.RaftLog.LastIndex() {
-		preveLogIndex = r.RaftLog.LastIndex()
-	}
 	preveLogTerm, _ := r.RaftLog.Term(preveLogIndex)
 	// 发送的log entries
 	entries_ := make([]pb.Entry, 0)
 	if next <= r.RaftLog.LastIndex() {
-		if next <= r.RaftLog.stabled {
-			entries_, _ = r.RaftLog.storage.Entries(next, r.RaftLog.stabled+1)
+		first := r.RaftLog.entries[0].Index
+		if next < first {
+			return false
 		}
-		entries_ = append(entries_, r.RaftLog.entries...)
+		entries_ = r.RaftLog.entries[next-first:]
 	}
 	entries := make([]*pb.Entry, len(entries_))
 	for idx, entry := range entries_ {
