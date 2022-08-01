@@ -254,19 +254,19 @@ func (r *Raft) becomeCandidate() {
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
+	// NOTE: Leader should propose a noop entry on its term
 	r.State = StateLeader
-	r.Vote = r.id
+	r.Lead = r.id
+	lastIndex, _ := r.RaftLog.storage.LastIndex()
+	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: lastIndex + 1})
 	for peer, _ := range r.votes {
-		lastIndex, _ := r.RaftLog.storage.LastIndex()
 		if peer == r.id {
-			r.Prs[peer] = &Progress{lastIndex, lastIndex + 1}
+			r.Prs[peer] = &Progress{lastIndex + 1, lastIndex + 2}
 		} else {
 			r.Prs[peer] = &Progress{0, lastIndex + 1}
 		}
 	}
 	r.heartbeatElapsed = 0
-	// NOTE: Leader should propose a noop entry on its term
-
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -344,9 +344,14 @@ func (r *Raft) Step(m pb.Message) error {
 
 func (r *Raft) propose(m pb.Message) {
 	for _, entry := range m.Entries {
+		entry.Index = r.RaftLog.LastIndex() + 1
+		entry.Term = r.Term
 		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 	}
 	for peer, _ := range r.votes {
+		if r.id == peer {
+			continue
+		}
 		r.sendAppend(peer)
 	}
 }
