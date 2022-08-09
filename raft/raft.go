@@ -256,7 +256,7 @@ func (r *Raft) becomeLeader() {
 	// NOTE: Leader should propose a noop entry on its term
 	r.State = StateLeader
 	r.Lead = r.id
-	lastIndex, _ := r.RaftLog.storage.LastIndex()
+	lastIndex := r.RaftLog.LastIndex()
 	//log.Println(lastIndex)
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: lastIndex + 1})
 	for peer, _ := range r.votes {
@@ -510,9 +510,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 
-	//log.Println(r.RaftLog.entries)
-	//log.Println(m.Entries)
-	//log.Printf("Term:%v, Index:%v \n", m.LogTerm, m.Index)
 	preveTerm, err := r.RaftLog.Term(m.Index)
 	if err != nil || preveTerm != m.LogTerm {
 		msg := pb.Message{
