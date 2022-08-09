@@ -105,13 +105,8 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	if l.committed == l.applied {
 		return
 	}
-	first, _ := l.storage.FirstIndex()
-
-	if l.applied < first {
-		ents, _ = l.storage.Entries(first, l.committed+1)
-	} else {
-		ents, _ = l.storage.Entries(l.applied, l.committed+1)
-	}
+	first := l.entries[0].Index
+	ents = l.entries[l.applied-first+1 : l.committed-first+1]
 	return
 }
 

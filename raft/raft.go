@@ -17,7 +17,6 @@ package raft
 import (
 	"errors"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
-	"log"
 	"math/rand"
 )
 
@@ -258,14 +257,15 @@ func (r *Raft) becomeLeader() {
 	r.State = StateLeader
 	r.Lead = r.id
 	lastIndex, _ := r.RaftLog.storage.LastIndex()
+	//log.Println(lastIndex)
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: lastIndex + 1})
 	for peer, _ := range r.votes {
 		if peer == r.id {
 			r.Prs[peer] = &Progress{lastIndex + 1, lastIndex + 2}
 		} else {
 			r.Prs[peer] = &Progress{0, lastIndex + 1}
+			r.sendAppend(peer)
 		}
-		r.sendAppend(peer)
 	}
 	r.heartbeatElapsed = 0
 }
@@ -354,6 +354,9 @@ func (r *Raft) propose(m pb.Message) {
 			continue
 		}
 		r.sendAppend(peer)
+	}
+	if len(r.Prs) == 1 {
+		r.RaftLog.committed = r.RaftLog.LastIndex()
 	}
 }
 
@@ -453,8 +456,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 		return false
 	}
 	progress := r.Prs[to]
-	//match := progress.Match
 	next := progress.Next
+	//log.Printf("Send from: %v, to: %v \n", next, to)
 	preveLogIndex := next - 1
 	preveLogTerm, _ := r.RaftLog.Term(preveLogIndex)
 	// 发送的log entries
@@ -466,9 +469,11 @@ func (r *Raft) sendAppend(to uint64) bool {
 		}
 		entries_ = r.RaftLog.entries[next-first:]
 	}
+	//log.Println(r.RaftLog.entries)
+	//log.Printf("Send: %v \n", entries_)
 	entries := make([]*pb.Entry, len(entries_))
-	for idx, entry := range entries_ {
-		entries[idx] = &entry
+	for idx := 0; idx < len(entries_); idx++ {
+		entries[idx] = &entries_[idx]
 	}
 
 	msg := pb.Message{
@@ -500,10 +505,14 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	if m.Term >= r.Term {
 		r.becomeFollower(m.Term, m.From)
+		r.Lead = m.From
 		r.Vote = None
 	}
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 
+	//log.Println(r.RaftLog.entries)
+	//log.Println(m.Entries)
+	//log.Printf("Term:%v, Index:%v \n", m.LogTerm, m.Index)
 	preveTerm, err := r.RaftLog.Term(m.Index)
 	if err != nil || preveTerm != m.LogTerm {
 		msg := pb.Message{
@@ -515,15 +524,30 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.msgs = append(r.msgs, msg)
 		return
 	}
+	//mStorage, _ := r.RaftLog.storage.(*MemoryStorage)
+	if len(m.Entries) > 0 {
+		if len(r.RaftLog.entries) > 0 {
+			for i, entry := range m.Entries {
+				index := entry.Index
+				term := entry.Term
+				if t, err := r.RaftLog.Term(index); err != nil || term != t {
+					offset := r.RaftLog.entries[0].Index
+					r.RaftLog.entries = r.RaftLog.entries[:index-offset]
+					r.RaftLog.stabled = index - 1
+					for idx := i; idx < len(m.Entries); idx++ {
+						r.RaftLog.entries = append(r.RaftLog.entries, *(m.Entries[idx]))
+					}
+					break
+				}
+			}
+		} else {
+			for _, entry := range m.Entries {
+				r.RaftLog.entries = append(r.RaftLog.entries, *entry)
+			}
+		}
 
-	if m.Index < r.RaftLog.stabled {
-		log.Printf("There are en error: m.Index cannot be smaller than r.RaftLog.stabled!\n")
 	}
 
-	r.RaftLog.entries = r.RaftLog.entries[:m.Index-r.RaftLog.stabled]
-	for _, entry := range m.Entries {
-		r.RaftLog.entries = append(r.RaftLog.entries, *(entry))
-	}
 	if m.Commit > r.RaftLog.committed {
 		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 	}
@@ -545,7 +569,8 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	}
 	if m.Reject {
 		if r.Prs[m.From].Next > 1 {
-			progress := &Progress{Match: r.Prs[m.From].Match, Next: r.Prs[m.From].Next - 1}
+			next := min(r.Prs[m.From].Next-1, r.RaftLog.LastIndex()+1)
+			progress := &Progress{Match: r.Prs[m.From].Match, Next: next}
 			r.Prs[m.From] = progress
 		}
 	} else {
