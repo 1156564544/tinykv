@@ -233,7 +233,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.State = StateFollower
 	r.Term = term
 	r.Lead = lead
-	r.Vote = None
+	//r.Vote = None
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
@@ -245,8 +245,14 @@ func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
 	r.Term += 1
+	for peer, _ := range r.votes {
+		if peer == r.id {
+			r.votes[peer] = true
+		} else {
+			r.votes[peer] = false
+		}
+	}
 	r.Vote = r.id
-	r.votes[r.id] = true
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 }
 
@@ -257,7 +263,7 @@ func (r *Raft) becomeLeader() {
 	r.State = StateLeader
 	r.Lead = r.id
 	lastIndex := r.RaftLog.LastIndex()
-	//log.Println(lastIndex)
+
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: lastIndex + 1})
 	for peer, _ := range r.votes {
 		if peer == r.id {
@@ -351,6 +357,10 @@ func (r *Raft) propose(m pb.Message) {
 	}
 	for peer, _ := range r.votes {
 		if r.id == peer {
+			pr := r.Prs[r.id]
+			pr.Match += 1
+			pr.Next += 1
+			r.Prs[r.id] = pr
 			continue
 		}
 		r.sendAppend(peer)
@@ -433,6 +443,9 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 	if m.Term == r.Term && m.Reject == false {
 		r.votes[m.From] = true
 	}
+	if r.State == StateLeader {
+		return
+	}
 	voteNum := 0
 	for peer, v := range r.votes {
 		if peer == r.id {
@@ -457,7 +470,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 	}
 	progress := r.Prs[to]
 	next := progress.Next
-	//log.Printf("Send from: %v, to: %v \n", next, to)
 	preveLogIndex := next - 1
 	preveLogTerm, _ := r.RaftLog.Term(preveLogIndex)
 	// 发送的log entries
@@ -469,8 +481,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		}
 		entries_ = r.RaftLog.entries[next-first:]
 	}
-	//log.Println(r.RaftLog.entries)
-	//log.Printf("Send: %v \n", entries_)
 	entries := make([]*pb.Entry, len(entries_))
 	for idx := 0; idx < len(entries_); idx++ {
 		entries[idx] = &entries_[idx]
@@ -530,7 +540,19 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 				if t, err := r.RaftLog.Term(index); err != nil || term != t {
 					offset := r.RaftLog.entries[0].Index
 					r.RaftLog.entries = r.RaftLog.entries[:index-offset]
-					r.RaftLog.stabled = index - 1
+					// There is only updating stabled but not storage
+					if r.RaftLog.stabled >= index {
+						entries := []pb.Entry{}
+						for _, e := range r.RaftLog.entries {
+							if e.Index == index-1 {
+								entries = append(entries, e)
+								break
+							}
+						}
+						r.RaftLog.stabled = index - 1
+						storage := r.RaftLog.storage.(*MemoryStorage)
+						storage.Append(entries)
+					}
 					for idx := i; idx < len(m.Entries); idx++ {
 						r.RaftLog.entries = append(r.RaftLog.entries, *(m.Entries[idx]))
 					}
@@ -570,6 +592,7 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 			progress := &Progress{Match: r.Prs[m.From].Match, Next: next}
 			r.Prs[m.From] = progress
 		}
+		r.sendAppend(m.From)
 	} else {
 		progress := &Progress{}
 		progress.Match = min(m.Index+uint64(len(m.Entries)), r.RaftLog.LastIndex())
@@ -592,6 +615,12 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 			}
 			if num > len(r.votes)/2 {
 				r.RaftLog.committed = i
+				for peer, _ := range r.votes {
+					if peer == r.id {
+						continue
+					}
+					r.sendAppend(peer)
+				}
 				break
 			}
 		}
@@ -615,6 +644,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
 		To:      to,
+		Commit:  r.RaftLog.committed,
 		Term:    r.Term}
 	r.msgs = append(r.msgs, msg)
 }
@@ -636,20 +666,29 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		r.Vote = None
 	}
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
+	reject := false
+	if r.RaftLog.committed != m.Commit {
+		reject = true
+	}
 
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		From:    m.To,
 		To:      m.From,
-		Term:    r.Term}
+		Term:    r.Term,
+		Reject:  reject}
 	r.msgs = append(r.msgs, msg)
 }
 
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
+		r.Vote = None
 	}
 	r.heartbeatElapsed = 0
+	if m.Reject {
+		r.sendAppend(m.From)
+	}
 }
 
 // handleSnapshot handle Snapshot RPC request

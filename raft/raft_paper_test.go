@@ -27,7 +27,6 @@ package raft
 
 import (
 	"fmt"
-	"log"
 	"reflect"
 	"sort"
 	"testing"
@@ -745,8 +744,7 @@ func TestLeaderSyncFollowerLog2AB(t *testing.T) {
 		n.send(pb.Message{From: 3, To: 1, MsgType: pb.MessageType_MsgRequestVoteResponse, Term: term + 1})
 
 		n.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
-		log.Println(lead.RaftLog.entries)
-		log.Println(follower.RaftLog.entries)
+
 		if g := diffu(ltoa(lead.RaftLog), ltoa(follower.RaftLog)); g != "" {
 			t.Errorf("#%d: log diff:\n%s", i, g)
 		}
