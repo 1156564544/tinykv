@@ -17,7 +17,6 @@ package raft
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"math/rand"
 	"reflect"
 	"testing"
@@ -150,23 +149,11 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 		entsWithConfig(cfg, 2),     // Node 3: Won second election
 		votedWithConfig(cfg, 3, 2), // Node 4: Voted but didn't get logs
 		votedWithConfig(cfg, 3, 2)) // Node 5: Voted but didn't get logs
-	node1 := n.peers[1].(*Raft)
-	node2 := n.peers[2].(*Raft)
-	node3 := n.peers[3].(*Raft)
-	//node3.Vote = 3
-	node4 := n.peers[4].(*Raft)
-	node5 := n.peers[5].(*Raft)
-	log.Printf("node:%v, term:%v, vote:%v, state:%v\n", node1.id, node1.Term, node1.Vote, node1.State)
-	log.Printf("node:%v, term:%v, vote:%v, state:%v\n", node2.id, node2.Term, node2.Vote, node2.State)
-	log.Printf("node:%v, term:%v, vote:%v, state:%v\n", node3.id, node3.Term, node3.Vote, node3.State)
-	log.Printf("node:%v, term:%v, vote:%v, state:%v\n", node4.id, node4.Term, node4.Vote, node4.State)
-	log.Printf("node:%v, term:%v, vote:%v, state:%v\n", node5.id, node5.Term, node5.Vote, node5.State)
 
 	// Node 1 campaigns. The election fails because a quorum of nodes
 	// know about the election that already happened at term 2. Node 1's
 	// term is pushed ahead to 2.
 	n.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
-	node1.State = StateFollower
 	sm1 := n.peers[1].(*Raft)
 	if sm1.State != StateFollower {
 		t.Errorf("state = %s, want StateFollower", sm1.State)
