@@ -566,7 +566,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 
 	}
-
+	m.Commit = min(m.Commit, m.Index+uint64(len(m.Entries)))
 	if m.Commit > r.RaftLog.committed {
 		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 	}
