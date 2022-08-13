@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -68,7 +67,9 @@ type Ready struct {
 
 // RawNode is a wrapper of Raft.
 type RawNode struct {
-	Raft *Raft
+	Raft         *Raft
+	LastStabled  uint64
+	LastCommited uint64
 	// Your Data Here (2A).
 }
 
@@ -77,6 +78,8 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
 	node := new(RawNode)
 	node.Raft = newRaft(config)
+	node.LastStabled = node.Raft.RaftLog.stabled
+	node.LastCommited = 0
 	return node, nil
 }
 
@@ -145,19 +148,45 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
-	return Ready{}
+	r := Ready{}
+	//r.Vote = rn.Raft.Vote
+	//r.Term = rn.Raft.Term
+	//r.Commit = rn.Raft.RaftLog.committed
+	// r.Lead = rn.Raft.Lead
+	// r.RaftState = rn.Raft.State
+	entries := make([]pb.Entry, 0)
+	committedEntries := make([]pb.Entry, 0)
+	for _, e := range rn.Raft.RaftLog.entries {
+		if e.Index > rn.LastStabled {
+			entries = append(entries, e)
+		}
+		if e.Index > rn.LastCommited && e.Index <= rn.Raft.RaftLog.committed {
+			committedEntries = append(committedEntries, e)
+		}
+	}
+
+	r.Entries = entries
+	r.CommittedEntries = committedEntries
+	return r
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-	return false
+	if rn.LastCommited == rn.Raft.RaftLog.committed && rn.LastStabled == rn.Raft.RaftLog.stabled {
+		return false
+	}
+	return true
 }
 
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+	rn.LastCommited += uint64(len(rd.CommittedEntries))
+	rn.Raft.RaftLog.committed = rn.LastCommited
+	rn.LastStabled += uint64(len(rd.Entries))
+	rn.Raft.RaftLog.stabled = rn.LastStabled
 }
 
 // GetProgress return the Progress of this node and its peers, if this

@@ -265,8 +265,13 @@ func (r *Raft) becomeLeader() {
 	r.State = StateLeader
 	r.Lead = r.id
 	lastIndex := r.RaftLog.LastIndex()
+	r.heartbeatElapsed = 0
 
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Term: r.Term, Index: lastIndex + 1})
+	if len(r.Prs) == 1 {
+		r.RaftLog.committed += 1
+		return
+	}
 	for peer, _ := range r.Prs {
 		if peer == r.id {
 			r.Prs[peer] = &Progress{lastIndex + 1, lastIndex + 2}
@@ -275,7 +280,6 @@ func (r *Raft) becomeLeader() {
 			r.sendAppend(peer)
 		}
 	}
-	r.heartbeatElapsed = 0
 }
 
 // Step the entrance of handle message, see `MessageType`
